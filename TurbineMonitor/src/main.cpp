@@ -2,6 +2,8 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <PubSubClient.h>
+#include <LiquidCrystal_I2C.h>
+#include "RTClib.h"
 #include "DHT.h"
 
 /*
@@ -30,6 +32,18 @@ float alarmBotLevel = 3.5;
 const uint8_t redPin = 9;
 const uint8_t greenPin = 5;
 const uint8_t bluePin = 6;
+
+/*
+ * Liquid Crystal Display
+ */
+LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);
+
+/*
+ *  RTC Library 
+ */
+RTC_DS3231 rtc;
+bool isRTCpresent = false;
+char myTimestamp[16] = { 0 };
 
 /*
  * Ethernet Connection Variables
@@ -86,10 +100,27 @@ boolean reconnect() {
         // ... and resubscribe
         client.subscribe("alarmTrigger");
         client.subscribe("warnTrigger");
+
+        // Show connected message on LCD
+        lcd.clear();
+
+        lcd.setCursor(0,0);
+        lcd.print("MQTT Client");
+        
+        lcd.setCursor(0, 1);
+        lcd.print("Connected");
+
     }
     else {
         Serial.print("Fail to connect, ");
         Serial.println(client.state());
+
+        // Show connected message on LCD
+        lcd.setCursor(0,0);
+        lcd.print("MQTT Client");
+        
+        lcd.setCursor(0, 1);
+        lcd.print("Fail to connect");
     }
   
     return client.connected();
@@ -121,6 +152,13 @@ void setup() {
     pinMode(greenPin, OUTPUT);
     pinMode(bluePin, OUTPUT);
 
+    // Initialize lcd screen
+    lcd.begin();
+    lcd.backlight();
+
+    lcd.setCursor(0, 0);
+    lcd.print("Booting up");
+
     // Intialize DHT library
     dht.begin();
 
@@ -146,6 +184,18 @@ void setup() {
 
     // Initial state
     state = NORMAL;
+
+    // Start RTC
+    if (!rtc.begin()) {
+        Serial.println("Couldn't find RTC");
+        isRTCpresent = false;
+    }
+    else {
+        Serial.println("RTC detected");
+        isRTCpresent = true;
+
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    }
 }
 
 void loop() {
@@ -197,6 +247,22 @@ void loop() {
         rgb_led_write(255, 0, 255); // green light
         if (client.connected()) {
             client.publish("state", "NORMAL");
+        }
+
+        // RTC & LCD Update
+        if (isRTCpresent) {
+            DateTime now = rtc.now();
+            memset(myTimestamp, 0, sizeof(myTimestamp));
+            sprintf(myTimestamp, "%d/%d-%d:%d:%d", now.day(), 
+                                                   now.month(), 
+                                                   now.hour(), 
+                                                   now.minute(),
+                                                   now.second());
+            lcd.clear();
+            lcd.setCursor(0,0);
+            lcd.print(myTimestamp);
+            lcd.setCursor(0, 1);
+            lcd.print("Normal");
         }
         break;
 
