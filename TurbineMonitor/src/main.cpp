@@ -15,6 +15,10 @@
 #define DHTPIN 7
 
 DHT dht(DHTPIN, DHTTYPE);
+float t = 0.0;
+float h = 0.0;
+char t_pub[10] = { 0 };
+char h_pub[10] = { 0 };
 
 /*
  * Relay Logic Variables
@@ -63,7 +67,7 @@ boolean down = false;
  * Encoder Library
  */
 #define ENCODER_PINA 8
-#define ENCODER_PINB 4
+#define ENCODER_PINB A3
 #define ENCODER_BTN A2
 
 ClickEncoder *encoder;
@@ -86,8 +90,8 @@ IPAddress server(192, 168, 2, 10);
 
 EthernetClient ethClient;
 PubSubClient client;
-
 long lastReconnectAttempt = 0;
+
 /*
  * Alarm State Machine Variables
  */
@@ -117,6 +121,14 @@ float averageMeasure(uint8_t pin, uint8_t points) {
 }
 
 /*
+ * Analog Read Variables
+ */
+float ai0 = 0.0;
+float ai1 = 0.0;
+char ai0_pub[10] = { 0 };
+char ai1_pub[10] = { 0 };
+
+/*
  * RGB Write
  */
 void rgb_led_write(int redValue, int greenValue, int blueValue) {
@@ -139,10 +151,8 @@ boolean reconnect() {
 
         // Show connected message on LCD
         lcd.clear();
-
         lcd.setCursor(0,0);
         lcd.print("MQTT Client");
-        
         lcd.setCursor(0, 1);
         lcd.print("Connected");
 
@@ -154,7 +164,6 @@ boolean reconnect() {
         // Show connected message on LCD
         lcd.setCursor(0,0);
         lcd.print("MQTT Client");
-        
         lcd.setCursor(0, 1);
         lcd.print("Fail to connect");
     }
@@ -187,16 +196,23 @@ void timerIsr() {
  */
 void readRotaryEncoder() {
     value += encoder->getValue();
-  
-    if (value/2 > last) {
-        last = value/2;
-        down = true;
-        delay(150);
-    } 
-    else if (value/2 < last) {
-        last = value/2;
-        up = true;
-        delay(150);
+    if (value != last) {
+        if (value < last) {
+            last = value;
+            down = true;
+            up = false;
+            delay(150);
+        }
+        else {
+            last = value;
+            down = false;
+            up = true;
+            delay(150);
+        }
+    }
+    else {
+        down = false;
+        up = false;
     }
 }
 
@@ -225,36 +241,8 @@ void useMenu() {
     while(!exitNow) {
         readRotaryEncoder();
         if (up) Serial.println("UP");
-        if (down) Serial.println("DOWN");
-
-        // if (encPos > oldEncPos) {
-        //     if (currentPos > 8) {
-        //         currentPos = 0;
-        //     }
-        //     else {
-        //         currentPos++;
-        //     }
-        //     displayMenu(currentPos);
-        //     oldEncPos = encPos;
-        // }
-        // else if (encPos < oldEncPos) {
-        //     if (currentPos == 0) {
-        //         currentPos = 8;
-        //     }
-        //     else {
-        //         currentPos--;
-        //     }
-        //     displayMenu(currentPos);
-        //     oldEncPos = encPos;
-        // }
-        // else {
-        //     Serial.println("No change");
-        // }
-
-        // Update button value
-
-        // Wait one cycle
-        // delay(1000);
+        else if (down) Serial.println("DOWN");
+        else Serial.println("DON'T MOVE");
     }
 }
 
@@ -285,7 +273,7 @@ void setup() {
     encoder = new ClickEncoder(ENCODER_PINA, ENCODER_PINB, ENCODER_BTN);
     encoder->setAccelerationEnabled(false);
 
-    last = encoder->getValue();
+    last = -1;
 
     // Intialize DHT library
     dht.begin();
@@ -318,7 +306,6 @@ void setup() {
     else {
         Serial.println("RTC detected");
         isRTCpresent = true;
-
         rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
 }
@@ -341,7 +328,22 @@ void loop() {
     }
 
     // ADC read logic
-    float voltage = averageMeasure(A0, 60);
+    ai0 = averageMeasure(A0, 60);
+    dtostrf((double) ai0, 5, 2, ai0_pub);
+    ai1 = averageMeasure(A1, 60);
+    dtostrf((double) ai1, 5, 2, ai1_pub);
+
+    // Get temperature and humidity
+    h = dht.readHumidity();
+    t = dht.readTemperature();
+    if (isnan(h) || isnan(t)) {
+        sprintf(h_pub, "NA");
+        sprintf(t_pub, "NA");
+    }
+    else {
+        dtostrf((double) t, 4, 1, t_pub);
+        dtostrf((double) h, 4, 1, h_pub);
+    }
 
     // Update state
     switch(state) {
@@ -352,12 +354,12 @@ void loop() {
             break;
         }
         
-        if (voltage > alarmTopLevel) {
+        if (ai0 > alarmTopLevel) {
             state = ALARM; 
             break;
         }
         
-        if (voltage > warnTopLevel) {
+        if (ai0 > warnTopLevel) {
             state = WARNING; 
             break;
         }
@@ -372,12 +374,12 @@ void loop() {
             break;
         }
 
-        if (voltage > alarmTopLevel) {
+        if (ai0 > alarmTopLevel) {
             state = ALARM; 
             break;
         }
         
-        if (voltage < warnBotLevel) {
+        if (ai0 < warnBotLevel) {
             state = NORMAL; 
             break;
         }
@@ -392,12 +394,12 @@ void loop() {
             break;
         }
         
-        if (voltage < warnBotLevel) {
+        if (ai0 < warnBotLevel) {
             state = NORMAL; 
             break;
         }
         
-        if (voltage < alarmBotLevel) {
+        if (ai0 < alarmBotLevel) {
             state = WARNING; 
             break;
         }
@@ -418,6 +420,10 @@ void loop() {
         rgb_led_write(255, 0, 255); // green light
         if (client.connected()) {
             client.publish("state", "NORMAL");
+            client.publish("ai0", ai0_pub);
+            client.publish("ai1", ai1_pub);
+            client.publish("temperature", t_pub);
+            client.publish("humidity", h_pub);
         }
 
         // RTC & LCD Update
@@ -436,43 +442,41 @@ void loop() {
     case WARNING:
         digitalWrite(relay1Pin, LOW);
         digitalWrite(relay2Pin, HIGH);
-        rgb_led_write(0, 0, 255); // yellow light
+        rgb_led_write(120, 120, 255); // yellow light
         if (client.connected()) {
             client.publish("state", "WARNING");
+            client.publish("ai0", ai0_pub);
+            client.publish("ai1", ai1_pub);
+            client.publish("temperature", t_pub);
+            client.publish("humidity", h_pub);
+
         }
         break;
 
     case ALARM:
         digitalWrite(relay1Pin, HIGH);
         digitalWrite(relay2Pin, LOW);
-        rgb_led_write(0, 255, 255); // yellow light
+        rgb_led_write(100, 255, 255); // red light
         if (client.connected()) {
             client.publish("state", "ALARM");
+            client.publish("ai0", ai0_pub);
+            client.publish("ai1", ai1_pub);
+            client.publish("temperature", t_pub);
+            client.publish("humidity", h_pub);
         }
         break;
     
     case MENU:
+        rgb_led_write(255, 255, 120); // blue light
+        if (client.connected()) {
+            client.publish("state", "MENU");
+        }
         useMenu();
         break;
     }
 
     // Button trigger for menu
     btnState = encoder->getButton();
-
-    // Read Temperature and Humidity (TEST)
-    //float h = dht.readHumidity();
-    //float t = dht.readTemperature();
-//
-    //if (isnan(h) || isnan(t)) {
-    //    Serial.println("Fail to read temperature sensor");
-    //}
-    //else {
-    //    Serial.print("Temp [");
-    //    Serial.print(t);
-    //    Serial.print(" C] Humidity [");
-    //    Serial.print(h);
-    //    Serial.println(" %]");
-    //}
 
     // Wait one cycle
     delay(1000);
