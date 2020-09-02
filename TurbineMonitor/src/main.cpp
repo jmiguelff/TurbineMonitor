@@ -143,11 +143,13 @@ void rgb_led_write(int redValue, int greenValue, int blueValue) {
 boolean reconnect() {
     if (client.connect("monitor01")) {
         Serial.println("Connected to MQTT Broker");
-        // Once connected, publish an announcement...
+        // Once connected, publish an announcement... and confs
         client.publish("welcomeTopic", "CONNECTED");
         // ... and resubscribe
-        client.subscribe("alarmTrigger");
-        client.subscribe("warnTrigger");
+        client.subscribe("warntop");
+        client.subscribe("warnbot");
+        client.subscribe("alarmtop");
+        client.subscribe("alarmbot");
 
         // Show connected message on LCD
         lcd.clear();
@@ -182,6 +184,25 @@ void msg_rcv_callback(char *topic, byte* payload, unsigned int length) {
         Serial.print((char)payload[i]);
     }
     Serial.println();
+    if (strcmp(topic, "warntop") == 0) {
+        warnTopLevel = atof((char *) payload);
+        Serial.println(warnTopLevel, 2);
+    }
+
+    if (strcmp(topic, "warnbot") == 0) {
+        warnBotLevel = atof((char *) payload);
+        Serial.println(warnBotLevel, 2);
+    }
+
+    if (strcmp(topic, "alarmtop") == 0) {
+        alarmTopLevel = atof((char *) payload);
+        Serial.println(alarmTopLevel, 2);
+    }
+
+    if (strcmp(topic, "alarmbot") == 0) {
+        alarmBotLevel = atof((char *) payload);
+        Serial.println(alarmBotLevel, 2);
+    }
 }
 
 /*
@@ -232,7 +253,7 @@ void displayMenu(uint8_t pos) {
  */
 void useMenu() {
     uint8_t currentPos = 0;
-    uint8_t btn = 0;
+    // uint8_t btn = 0;
     uint8_t exitNow = 0;
 
     // Call this update screen
@@ -242,7 +263,7 @@ void useMenu() {
         readRotaryEncoder();
         if (up) Serial.println("UP");
         else if (down) Serial.println("DOWN");
-        else Serial.println("DON'T MOVE");
+        else Serial.println("DIDN'T MOVE");
     }
 }
 
@@ -274,6 +295,9 @@ void setup() {
     encoder->setAccelerationEnabled(false);
 
     last = -1;
+
+    lcd.setCursor(0, 0);
+    lcd.print("Booting up2");
 
     // Intialize DHT library
     dht.begin();
