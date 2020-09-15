@@ -2,11 +2,9 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
 #include <LiquidCrystal_I2C.h>
-#include "RTClib.h"
 #include "DHT.h"
-#include <ClickEncoder.h>
-#include <TimerOne.h>
 #include <Adafruit_Sensor.h>
 
 /*
@@ -18,8 +16,6 @@
 DHT dht(DHTPIN, DHTTYPE);
 float t = 0.0;
 float h = 0.0;
-char t_pub[10] = { 0 };
-char h_pub[10] = { 0 };
 
 /*
  * Relay Logic Variables
@@ -46,43 +42,6 @@ const uint8_t bluePin = 6;
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);
 
 /*
- * Configuration Menu
- */
-uint8_t menuSize = 10;
-String menu[] = {
-    "Menu",
-    "Warning Top Val",
-    "Warning Bot Val",
-    "Alarm Top Val",
-    "Alarm Bot Val",
-    "Exit",
-    "NA",
-    "NA",
-    "NA",
-    ""
-};
-boolean up = false;
-boolean down = false;
-
-/*
- * Encoder Library
- */
-#define ENCODER_PINA 8
-#define ENCODER_PINB A3
-#define ENCODER_BTN A2
-
-ClickEncoder *encoder;
-int16_t last, value;
-uint8_t btnState = 0;
-
-/*
- *  RTC Library 
- */
-RTC_DS3231 rtc;
-bool isRTCpresent = false;
-char myTimestamp[16] = { 0 };
-
-/*
  * Ethernet Connection Variables
  */
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
@@ -94,9 +53,18 @@ PubSubClient client;
 long lastReconnectAttempt = 0;
 
 /*
+ *  Json generator
+ */
+//const size_t capacity = JSON_OBJECT_SIZE(5);
+//DynamicJsonDocument doc(capacity);
+StaticJsonDocument<60> doc;
+char buffer[70] = { 0 };
+size_t n = 0;
+
+/*
  * Alarm State Machine Variables
  */
-enum State { NORMAL = 0, WARNING, ALARM, MENU};
+enum State { NORMAL = 0, WARNING, ALARM };
 
 // Initial state
 State state = NORMAL;
@@ -126,8 +94,6 @@ float averageMeasure(uint8_t pin, uint8_t points) {
  */
 float ai0 = 0.0;
 float ai1 = 0.0;
-char ai0_pub[10] = { 0 };
-char ai1_pub[10] = { 0 };
 
 /*
  * RGB Write
@@ -144,9 +110,7 @@ void rgb_led_write(int redValue, int greenValue, int blueValue) {
 boolean reconnect() {
     if (client.connect("monitor01")) {
         Serial.println("Connected to MQTT Broker");
-        // Once connected, publish an announcement... and confs
-        client.publish("welcomeTopic", "CONNECTED");
-        // ... and resubscribe
+        // resubscribe
         client.subscribe("warntop");
         client.subscribe("warnbot");
         client.subscribe("alarmtop");
@@ -206,68 +170,6 @@ void msg_rcv_callback(char *topic, byte* payload, unsigned int length) {
     }
 }
 
-/*
- * Interrupt routine to get encoder state
- */
-void timerIsr() {
-    encoder->service();
-}
-
-/*
- * Get rotary encoder
- */
-void readRotaryEncoder() {
-    value += encoder->getValue();
-    if (value != last) {
-        if (value < last) {
-            last = value;
-            down = true;
-            up = false;
-            delay(150);
-        }
-        else {
-            last = value;
-            down = false;
-            up = true;
-            delay(150);
-        }
-    }
-    else {
-        down = false;
-        up = false;
-    }
-}
-
-/*
- * Display menu text
- */
-void displayMenu(uint8_t pos) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(menu[pos]);
-    lcd.setCursor(0, 1);
-    lcd.print(menu[pos + 1]);
-}
-
-/*
- * Use menu function
- */
-void useMenu() {
-    uint8_t currentPos = 0;
-    // uint8_t btn = 0;
-    uint8_t exitNow = 0;
-
-    // Call this update screen
-    displayMenu(currentPos);
-
-    while(!exitNow) {
-        readRotaryEncoder();
-        if (up) Serial.println("UP");
-        else if (down) Serial.println("DOWN");
-        else Serial.println("DIDN'T MOVE");
-    }
-}
-
 void setup() {
     // Initialize serial port
     Serial.begin(9600);
@@ -287,18 +189,6 @@ void setup() {
 
     lcd.setCursor(0, 0);
     lcd.print("Booting up");
-
-    // Initialize encoder
-    Timer1.initialize(1000);
-    Timer1.attachInterrupt(timerIsr);
-
-    encoder = new ClickEncoder(ENCODER_PINA, ENCODER_PINB, ENCODER_BTN);
-    encoder->setAccelerationEnabled(false);
-
-    last = -1;
-
-    lcd.setCursor(0, 0);
-    lcd.print("Booting up2");
 
     // Intialize DHT library
     dht.begin();
@@ -323,16 +213,6 @@ void setup() {
     client.setServer(server, 1883);
     client.setCallback(msg_rcv_callback);
 
-    // Start RTC
-    if (!rtc.begin()) {
-        Serial.println("Couldn't find RTC");
-        isRTCpresent = false;
-    }
-    else {
-        Serial.println("RTC detected");
-        isRTCpresent = true;
-        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    }
 }
 
 void loop() {
@@ -354,31 +234,20 @@ void loop() {
 
     // ADC read logic
     ai0 = averageMeasure(A0, 60);
-    dtostrf((double) ai0, 5, 2, ai0_pub);
     ai1 = averageMeasure(A1, 60);
-    dtostrf((double) ai1, 5, 2, ai1_pub);
 
     // Get temperature and humidity
     h = dht.readHumidity();
     t = dht.readTemperature();
-    if (isnan(h) || isnan(t)) {
-        sprintf(h_pub, "NA");
-        sprintf(t_pub, "NA");
-    }
-    else {
-        dtostrf((double) t, 4, 1, t_pub);
-        dtostrf((double) h, 4, 1, h_pub);
-    }
+
+    doc["a"] = ai0;
+    doc["b"] = ai1;
+    doc["t"] = t;
+    doc["h"] = h;
 
     // Update state
     switch(state) {
     case NORMAL:
-        if (btnState == ClickEncoder::Clicked) {
-            lastState = state; 
-            state = MENU; 
-            break;
-        }
-        
         if (ai0 > alarmTopLevel) {
             state = ALARM; 
             break;
@@ -393,12 +262,6 @@ void loop() {
         break;
 
     case WARNING:
-        if (btnState == ClickEncoder::Clicked) {
-            lastState = state; 
-            state = MENU; 
-            break;
-        }
-
         if (ai0 > alarmTopLevel) {
             state = ALARM; 
             break;
@@ -413,12 +276,6 @@ void loop() {
         break;
 
     case ALARM:
-        if (btnState == ClickEncoder::Clicked) {
-            lastState = state;
-            state = MENU; 
-            break;
-        }
-        
         if (ai0 < warnBotLevel) {
             state = NORMAL; 
             break;
@@ -431,10 +288,6 @@ void loop() {
 
         state = ALARM; 
         break;
-
-    case MENU:
-        state = lastState;
-        break;
     }
 
     // Update output
@@ -443,65 +296,34 @@ void loop() {
         digitalWrite(relay1Pin, HIGH);
         digitalWrite(relay2Pin, HIGH);
         rgb_led_write(255, 0, 255); // green light
-        if (client.connected()) {
-            client.publish("state", "NORMAL");
-            client.publish("ai0", ai0_pub);
-            client.publish("ai1", ai1_pub);
-            client.publish("temperature", t_pub);
-            client.publish("humidity", h_pub);
-        }
-
-        // RTC & LCD Update
-        if (isRTCpresent) {
-            DateTime now = rtc.now();
-            memset(myTimestamp, 0, sizeof(myTimestamp));
-            sprintf(myTimestamp, "%d/%d-%d:%d:%d", now.day(), now.month(), now.hour(), now.minute(), now.second());
-            lcd.clear();
-            lcd.setCursor(0,0);
-            lcd.print(myTimestamp);
-            lcd.setCursor(0, 1);
-            lcd.print("Normal");
-        }
+        doc["s"] = "NORMAL";
         break;
 
     case WARNING:
         digitalWrite(relay1Pin, LOW);
         digitalWrite(relay2Pin, HIGH);
         rgb_led_write(120, 120, 255); // yellow light
-        if (client.connected()) {
-            client.publish("state", "WARNING");
-            client.publish("ai0", ai0_pub);
-            client.publish("ai1", ai1_pub);
-            client.publish("temperature", t_pub);
-            client.publish("humidity", h_pub);
-
-        }
+        doc["s"] = "WARNING";
         break;
 
     case ALARM:
         digitalWrite(relay1Pin, HIGH);
         digitalWrite(relay2Pin, LOW);
         rgb_led_write(100, 255, 255); // red light
-        if (client.connected()) {
-            client.publish("state", "ALARM");
-            client.publish("ai0", ai0_pub);
-            client.publish("ai1", ai1_pub);
-            client.publish("temperature", t_pub);
-            client.publish("humidity", h_pub);
-        }
-        break;
-    
-    case MENU:
-        rgb_led_write(255, 255, 120); // blue light
-        if (client.connected()) {
-            client.publish("state", "MENU");
-        }
-        useMenu();
+        doc["s"] = "ALARM";
         break;
     }
 
-    // Button trigger for menu
-    btnState = encoder->getButton();
+    if (client.connected()) {
+        memset(buffer, 0, sizeof(buffer));
+        n = serializeJson(doc, buffer);
+        client.publish("example", buffer, n);
+    }
+    else {
+        serializeJson(doc, Serial);
+        Serial.println();
+        serializeJsonPretty(doc, Serial);
+    }
 
     // Wait one cycle
     delay(1000);
