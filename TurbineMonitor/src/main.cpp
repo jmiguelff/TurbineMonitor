@@ -7,6 +7,7 @@
 #include "DHT.h"
 #include <ClickEncoder.h>
 #include <TimerOne.h>
+#include <Adafruit_Sensor.h>
 
 /*
  * DHT Library init
@@ -85,8 +86,8 @@ char myTimestamp[16] = { 0 };
  * Ethernet Connection Variables
  */
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip(192, 168, 2, 20);
-IPAddress server(192, 168, 2, 10);
+IPAddress ip(192, 168, 1, 41);
+IPAddress server(192, 168, 1, 40);
 
 EthernetClient ethClient;
 PubSubClient client;
