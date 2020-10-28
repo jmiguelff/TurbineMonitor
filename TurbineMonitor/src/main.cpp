@@ -14,8 +14,6 @@
 #define DHTPIN 7
 
 DHT dht(DHTPIN, DHTTYPE);
-float t = 0.0;
-float h = 0.0;
 
 /*
  * Relay Logic Variables
@@ -23,11 +21,11 @@ float h = 0.0;
 const uint8_t relay1Pin = 2;
 const uint8_t relay2Pin = 3;
 
-float warnTopLevel = 2.0;
-float warnBotLevel = 1.5;
+int warnTopLevel = 410; // 2.0 V
+int warnBotLevel = 307; // 1.5 V
 
-float alarmTopLevel = 4.0;
-float alarmBotLevel = 3.5;
+int alarmTopLevel = 818; // 4.0 V
+int alarmBotLevel = 716; // 3.5 V
 
 /*
  * LED Logic Consts
@@ -55,25 +53,20 @@ long lastReconnectAttempt = 0;
 /*
  *  Json generator
  */
-//const size_t capacity = JSON_OBJECT_SIZE(5);
-//DynamicJsonDocument doc(capacity);
-StaticJsonDocument<60> doc;
-char buffer[70] = { 0 };
-size_t n = 0;
+StaticJsonDocument<100> doc;
+char buffer[100] = { 0 };
+size_t bufferLen = 0;
 
 /*
  * Alarm State Machine Variables
  */
 enum State { NORMAL = 0, WARNING, ALARM };
-
-// Initial state
 State state = NORMAL;
-State lastState = NORMAL;
 
 /*
  * Analog Read Function
  */
-float averageMeasure(uint8_t pin, uint8_t points) {
+int averageMeasure(uint8_t pin, uint8_t points) {
     // Add all measures
     uint16_t sum = 0;
     int sensorValue = 0;
@@ -83,17 +76,10 @@ float averageMeasure(uint8_t pin, uint8_t points) {
     }
 
     // Divide by number of measures
-    float avg = sum / points;
+    int avg = sum / points;
 
-    // Return value in voltage
-    return avg * (5.0 / 1023.0);
+    return avg;
 }
-
-/*
- * Analog Read Variables
- */
-float ai0 = 0.0;
-float ai1 = 0.0;
 
 /*
  * RGB Write
@@ -109,7 +95,6 @@ void rgb_led_write(int redValue, int greenValue, int blueValue) {
  */
 boolean reconnect() {
     if (client.connect("monitor01")) {
-        Serial.println("Connected to MQTT Broker");
         // resubscribe
         client.subscribe("warntop");
         client.subscribe("warnbot");
@@ -119,9 +104,9 @@ boolean reconnect() {
         // Show connected message on LCD
         lcd.clear();
         lcd.setCursor(0,0);
-        lcd.print("MQTT Client");
+        lcd.print("MQTT Connected to");
         lcd.setCursor(0, 1);
-        lcd.print("Connected");
+        lcd.print("192.168.1.40");
 
     }
     else {
@@ -129,6 +114,7 @@ boolean reconnect() {
         Serial.println(client.state());
 
         // Show connected message on LCD
+        lcd.clear();
         lcd.setCursor(0,0);
         lcd.print("MQTT Client");
         lcd.setCursor(0, 1);
@@ -142,31 +128,34 @@ boolean reconnect() {
  * Callback for MQTT Receive Message (for testing)
  */
 void msg_rcv_callback(char *topic, byte* payload, unsigned int length) {
-    Serial.print("Message arrived [");
-    Serial.print(topic);
-    Serial.print("] ");
-    for (unsigned int i = 0; i < length; i++) {
-        Serial.print((char)payload[i]);
+    char myPayload[10] = { 0 };
+    if (length >= sizeof(myPayload)) {
+        return;
     }
-    Serial.println();
+    memcpy(myPayload, payload, length);
+
     if (strcmp(topic, "warntop") == 0) {
-        warnTopLevel = atof((char *) payload);
-        Serial.println(warnTopLevel, 2);
+        warnTopLevel = atoi(myPayload);
+        doc["topW"] = warnTopLevel;
+        return;
     }
 
     if (strcmp(topic, "warnbot") == 0) {
-        warnBotLevel = atof((char *) payload);
-        Serial.println(warnBotLevel, 2);
+        warnBotLevel = atoi(myPayload);
+        doc["botW"] = warnBotLevel;
+        return;
     }
 
     if (strcmp(topic, "alarmtop") == 0) {
-        alarmTopLevel = atof((char *) payload);
-        Serial.println(alarmTopLevel, 2);
+        alarmTopLevel = atoi(myPayload);
+        doc["topA"] = alarmTopLevel;
+        return;
     }
 
     if (strcmp(topic, "alarmbot") == 0) {
-        alarmBotLevel = atof((char *) payload);
-        Serial.println(alarmBotLevel, 2);
+        alarmBotLevel = atoi(myPayload);
+        doc["botA"] = alarmBotLevel;
+        return;
     }
 }
 
@@ -198,14 +187,20 @@ void setup() {
     delay(1500);
 
     if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-        Serial.println("Ethernet shield not found - connect shield and reboot");
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("No Eth shield");
+        lcd.setCursor(0, 1);
+        lcd.print("Reset");
         while (true) {
             delay(1); // Do nothing forever - until reboot
         }
     }
 
     if (Ethernet.linkStatus() == LinkOFF) {
-        Serial.println("Ethernet cable is not connected");
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("No Eth cable");
     }
 
     // Initialize MQTT client
@@ -213,6 +208,11 @@ void setup() {
     client.setServer(server, 1883);
     client.setCallback(msg_rcv_callback);
 
+    // Load const for JSON
+    doc["topA"] = alarmTopLevel;
+    doc["botA"] = alarmBotLevel;
+    doc["topW"] = warnTopLevel;
+    doc["botW"] = warnBotLevel;
 }
 
 void loop() {
@@ -233,12 +233,12 @@ void loop() {
     }
 
     // ADC read logic
-    ai0 = averageMeasure(A0, 60);
-    ai1 = averageMeasure(A1, 60);
+    int ai0 = averageMeasure(A0, 60);
+    int ai1 = averageMeasure(A1, 60);
 
     // Get temperature and humidity
-    h = dht.readHumidity();
-    t = dht.readTemperature();
+    float h = dht.readHumidity();
+    float t = dht.readTemperature();
 
     doc["a"] = ai0;
     doc["b"] = ai1;
@@ -252,12 +252,10 @@ void loop() {
             state = ALARM; 
             break;
         }
-        
         if (ai0 > warnTopLevel) {
             state = WARNING; 
             break;
         }
-
         state = NORMAL; 
         break;
 
@@ -266,12 +264,10 @@ void loop() {
             state = ALARM; 
             break;
         }
-        
         if (ai0 < warnBotLevel) {
             state = NORMAL; 
             break;
         }
-        
         state = WARNING; 
         break;
 
@@ -280,12 +276,10 @@ void loop() {
             state = NORMAL; 
             break;
         }
-        
         if (ai0 < alarmBotLevel) {
             state = WARNING; 
             break;
         }
-
         state = ALARM; 
         break;
     }
@@ -316,8 +310,8 @@ void loop() {
 
     if (client.connected()) {
         memset(buffer, 0, sizeof(buffer));
-        n = serializeJson(doc, buffer);
-        client.publish("example", buffer, n);
+        bufferLen = serializeJson(doc, buffer);
+        client.publish("vibrdata", buffer, bufferLen);
     }
     else {
         serializeJson(doc, Serial);
@@ -326,5 +320,5 @@ void loop() {
     }
 
     // Wait one cycle
-    delay(1000);
+    delay(100);
 }
