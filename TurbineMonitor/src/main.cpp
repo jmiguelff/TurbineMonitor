@@ -6,13 +6,29 @@
 #include <LiquidCrystal_I2C.h>
 #include "DHT.h"
 #include <Adafruit_Sensor.h>
+#include "ClickEncoder.h"
+#include "TimerOne.h"
+
+#define pinA 8      // DT
+#define pinB A3     // CLK
+#define pinSw A2    // SW
+#define STEPS 4
+
+#define DHTTYPE DHT11   // DHT11 Temp and humidity sensor
+#define DHTPIN 7        // One wire comms pin
+
+/*
+ * Click Encoder + TimerOne
+ */
+ClickEncoder encoder(pinA, pinB, pinSw, STEPS);
+
+void timerIsr() {
+  encoder.service();
+}
 
 /*
  * DHT Library init
  */
-#define DHTTYPE DHT11
-#define DHTPIN 7
-
 DHT dht(DHTPIN, DHTTYPE);
 
 /*
@@ -38,6 +54,7 @@ const uint8_t bluePin = 6;
  * Liquid Crystal Display
  */
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);
+uint8_t backlight = 0;
 
 /*
  * Ethernet Connection Variables
@@ -104,7 +121,7 @@ boolean reconnect() {
         // Show connected message on LCD
         lcd.clear();
         lcd.setCursor(0,0);
-        lcd.print("MQTT Connected to");
+        lcd.print("MQTT Connected");
         lcd.setCursor(0, 1);
         lcd.print("192.168.1.40");
 
@@ -163,6 +180,11 @@ void setup() {
     // Initialize serial port
     Serial.begin(9600);
 
+    Timer1.initialize(1000);
+    Timer1.attachInterrupt(timerIsr);
+
+    encoder.setAccelerationEnabled(true);
+
     // Initialize digital pins as outputs
     pinMode(relay1Pin, OUTPUT);
     pinMode(relay2Pin, OUTPUT);
@@ -175,6 +197,7 @@ void setup() {
     // Initialize lcd screen
     lcd.begin();
     lcd.backlight();
+    backlight = 1;
 
     lcd.setCursor(0, 0);
     lcd.print("Booting up");
@@ -317,6 +340,60 @@ void loop() {
         serializeJson(doc, Serial);
         Serial.println();
         serializeJsonPretty(doc, Serial);
+    }
+
+    uint8_t buttonState = encoder.getButton();
+    if (buttonState != 0) {
+        switch (buttonState) {
+        case ClickEncoder::Open:          //0
+            break;
+
+        case ClickEncoder::Closed:        //1
+            break;
+
+        case ClickEncoder::Pressed:       //2
+            break;
+
+        case ClickEncoder::Held:          //3
+            break;
+
+        case ClickEncoder::Released:      //4
+            break;
+
+        case ClickEncoder::Clicked:       //5
+            if (backlight) {
+                lcd.noBacklight();
+                backlight = 0;
+            }
+            else {
+                lcd.backlight();
+                backlight = 1;
+                lcd.clear();
+                lcd.setCursor(0,0);
+                switch (state) {
+                case NORMAL:
+                    lcd.print("NORMAL");
+                    break;
+
+                case WARNING:
+                    lcd.print("WARNING");
+                    break;
+
+                case ALARM:
+                    lcd.print("ALARM");
+                    break;
+                
+                default:
+                    break;
+                }
+                lcd.setCursor(0, 1);
+                lcd.print("192.168.1.40");
+            }
+            break;
+
+        case ClickEncoder::DoubleClicked: //6
+            break;
+        }
     }
 
     // Wait one cycle
